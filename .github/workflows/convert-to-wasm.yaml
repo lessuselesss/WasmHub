@@ -29,46 +29,85 @@ jobs:
 
       - name: Convert Docker Images to WASM
         run: |
+          set -ex  # Enable debugging with verbose output
           mkdir -p docs
           for dir in Container_Library/*; do
             [ -d "$dir" ] || continue
             NAME=$(basename "$dir")
-            for ARCH in amd64 riscv64 aarch64; do
-              OUTPUT_FILE="docs/${ARCH}-${NAME}-wasi.wasm"
-              if [ -f "$dir/Dockerfile" ]; then
-                docker buildx build -t "$NAME" "$dir" --platform=linux/${ARCH} --load
-                c2w --target-arch="$ARCH" "$NAME" "$OUTPUT_FILE"
-              elif [ -f "$dir/image" ]; then
-                IMAGE=$(cat "$dir/image")
-                docker pull "$IMAGE"
+            echo "Processing container: $NAME"
+            
+            # Only use amd64 for now to simplify debugging
+            ARCH="amd64"
+            OUTPUT_FILE="docs/${ARCH}-${NAME}-wasi.wasm"
+            
+            if [ -f "$dir/Dockerfile" ]; then
+              echo "Building Docker image for $NAME using Dockerfile"
+              docker buildx build -t "${NAME}:latest" "$dir" --platform=linux/${ARCH} --load
+              echo "Converting ${NAME}:latest Docker image to WASM"
+              c2w --target-arch="$ARCH" "${NAME}:latest" "$OUTPUT_FILE"
+            elif [ -f "$dir/image" ]; then
+              # Check if the image file contains FROM - if so, it's actually a Dockerfile
+              if grep -q "FROM" "$dir/image"; then
+                echo "File $dir/image appears to be a Dockerfile, building it"
+                # Create a temporary Dockerfile
+                cp "$dir/image" "$dir/Dockerfile.tmp"
+                docker buildx build -t "${NAME}:latest" -f "$dir/Dockerfile.tmp" "$dir" --platform=linux/${ARCH} --load
+                rm "$dir/Dockerfile.tmp"
+              else
+                IMAGE=$(cat "$dir/image" | tr -d '\r\n')
+                echo "Pulling Docker image $IMAGE"
+                docker pull --platform=linux/${ARCH} "$IMAGE"
+                echo "Converting $IMAGE Docker image to WASM"
                 c2w --target-arch="$ARCH" "$IMAGE" "$OUTPUT_FILE"
               fi
-            done
+            else
+              echo "No Dockerfile or image reference found in $dir, skipping"
+              continue
+            fi
+            
+            # Verify the wasm file was created
+            if [ -f "$OUTPUT_FILE" ]; then
+              echo "Successfully created $OUTPUT_FILE"
+              ls -la "$OUTPUT_FILE"
+            else
+              echo "ERROR: Failed to create $OUTPUT_FILE"
+            fi
           done
+
+      - name: List generated WASM files
+        run: |
+          echo "WASM files in docs directory:"
+          ls -la docs/
 
       - name: Upload WASM Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: wasm-artifacts
           path: docs/*.wasm
+          if-no-files-found: warn  # Don't fail if no files are found
 
       - name: Generate GitHub Pages HTML
         run: |
           echo '<html><head><title>WASM Containers</title></head><body><h1>Available WASM Containers</h1><ul>' > docs/index.html
-          for file in docs/*.wasm; do
-            [ -f "$file" ] || continue
+          find docs -name "*.wasm" | while read file; do
             FILENAME=$(basename "$file")
             echo "<li><a href='${FILENAME}'>${FILENAME}</a></li>" >> docs/index.html
+            echo "Added $FILENAME to index.html"
           done
           echo '</ul></body></html>' >> docs/index.html
+          
+          # Show the generated HTML
+          cat docs/index.html
 
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v4
+        if: success()  # Only deploy if previous steps succeeded
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./docs
 
       - name: Cleanup Docker
+        if: always()  # Run cleanup even if the job fails
         run: |
           docker ps -q | xargs -r docker stop
           docker system prune -f
