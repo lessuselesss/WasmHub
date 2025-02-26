@@ -67,3 +67,8 @@ jobs:
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./docs
+
+      - name: Cleanup Docker
+        run: |
+          docker ps -q | xargs -r docker stop
+          docker system prune -f
