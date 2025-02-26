@@ -25,6 +25,7 @@ jobs:
           tar -xzvf container2wasm-v0.6.4-linux-amd64.tar.gz
           sudo mv c2w /usr/local/bin/
           sudo mv c2w-net /usr/local/bin/
+          c2w --version # Verify installation
 
       - name: Convert Docker Images to WASM
         run: |
@@ -35,7 +36,7 @@ jobs:
             for ARCH in amd64 riscv64 aarch64; do
               OUTPUT_FILE="docs/${ARCH}-${NAME}-wasi.wasm"
               if [ -f "$dir/Dockerfile" ]; then
-                docker buildx build -t "$NAME" "$dir" --platform=linux/${ARCH}
+                docker buildx build -t "$NAME" "$dir" --platform=linux/${ARCH} --load
                 c2w --target-arch="$ARCH" "$NAME" "$OUTPUT_FILE"
               elif [ -f "$dir/image" ]; then
                 IMAGE=$(cat "$dir/image")
